@@ -50,3 +50,62 @@ void accumulate_time(struct kvm_vcpu *vcpu, struct kvmhv_tb_accumulator *next);
 #define start_timing(vcpu, next) do {} while (0)
 #define end_timing(vcpu) do {} while (0)
 #endif
+
+#define HV_WRAPPER_SET(reg, size)					\
+static inline void kvmppc_set_##reg ##_hv(struct kvm_vcpu *vcpu, u##size val)	\
+{									\
+	vcpu->arch.reg = val;						\
+}
+
+#define HV_WRAPPER_GET(reg, size)					\
+static inline u##size kvmppc_get_##reg ##_hv(struct kvm_vcpu *vcpu)	\
+{									\
+	return vcpu->arch.reg;						\
+}
+
+#define HV_WRAPPER(reg, size)						\
+	HV_WRAPPER_SET(reg, size)					\
+	HV_WRAPPER_GET(reg, size)					\
+
+#define HV_ARRAY_WRAPPER_SET(reg, size)					\
+static inline void kvmppc_set_##reg ##_hv(struct kvm_vcpu *vcpu, int i, u##size val)	\
+{									\
+	vcpu->arch.reg[i] = val;					\
+}
+
+#define HV_ARRAY_WRAPPER_GET(reg, size)					\
+static inline u##size kvmppc_get_##reg ##_hv(struct kvm_vcpu *vcpu, int i)	\
+{									\
+	return vcpu->arch.reg[i];					\
+}
+
+#define HV_ARRAY_WRAPPER(reg, size)					\
+	HV_ARRAY_WRAPPER_SET(reg, size)					\
+	HV_ARRAY_WRAPPER_GET(reg, size)					\
+
+HV_WRAPPER(mmcra, 64)
+HV_WRAPPER(hfscr, 64)
+HV_WRAPPER(fscr, 64)
+HV_WRAPPER(dscr, 64)
+HV_WRAPPER(purr, 64)
+HV_WRAPPER(spurr, 64)
+HV_WRAPPER(amr, 64)
+HV_WRAPPER(uamor, 64)
+HV_WRAPPER(siar, 64)
+HV_WRAPPER(sdar, 64)
+HV_WRAPPER(iamr, 64)
+HV_WRAPPER(dawr0, 64)
+HV_WRAPPER(dawr1, 64)
+HV_WRAPPER(dawrx0, 64)
+HV_WRAPPER(dawrx1, 64)
+HV_WRAPPER(ciabr, 64)
+HV_WRAPPER(wort, 64)
+HV_WRAPPER(ppr, 64)
+HV_WRAPPER(ctrl, 64)
+
+HV_ARRAY_WRAPPER(mmcr, 64)
+HV_ARRAY_WRAPPER(sier, 64)
+HV_ARRAY_WRAPPER(pmc, 32)
+
+HV_WRAPPER(pvr, 32)
+HV_WRAPPER(pspb, 32)
