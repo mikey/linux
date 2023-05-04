@@ -92,7 +92,8 @@ int kvmppc_emulate_loadstore(struct kvm_vcpu *vcpu)
 	vcpu->arch.mmio_host_swabbed = 0;
 
 	emulated = EMULATE_FAIL;
-	vcpu->arch.regs.msr = vcpu->arch.shared->msr;
+	vcpu->arch.regs.msr = kvmppc_get_msr(vcpu);
+	kvmhv_papr_reload_ptregs(vcpu, &vcpu->arch.regs);
 	if (analyse_instr(&op, &vcpu->arch.regs, ppc_inst(inst)) == 0) {
 		int type = op.type & INSTR_TYPE_MASK;
 		int size = GETSIZE(op.type);
@@ -356,6 +357,7 @@ int kvmppc_emulate_loadstore(struct kvm_vcpu *vcpu)
 		}
 	}
 
+	kvmhv_papr_mark_dirty_ptregs(vcpu, &vcpu->arch.regs);
 	trace_kvm_ppc_instr(inst, kvmppc_get_pc(vcpu), emulated);
 
 	/* Advance past emulated instruction. */

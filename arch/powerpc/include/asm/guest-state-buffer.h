@@ -5,6 +5,7 @@
 #ifndef _ASM_POWERPC_GUEST_STATE_BUFFER_H
 #define _ASM_POWERPC_GUEST_STATE_BUFFER_H
 
+#include "asm/hvcall.h"
 #include <linux/gfp.h>
 #include <linux/bitmap.h>
 #include <asm/plpar_wrappers.h>
@@ -14,16 +15,16 @@
  **************************************************************************/
 #define GSID_BLANK			0x0000
 
-#define GSID_HOST_STATE_SIZE		0x0001 /* Size of Hypervisor Internal Format VCPU state */
-#define GSID_RUN_OUTPUT_MIN_SIZE	0x0002 /* Minimum size of the Run VCPU output buffer */
-#define GSID_LOGICAL_PVR		0x0003 /* Logical PVR */
-#define GSID_TB_OFFSET			0x0004 /* Timebase Offset */
-#define GSID_PARTITION_TABLE		0x0005 /* Partition Scoped Page Table */
-#define GSID_PROCESS_TABLE		0x0006 /* Process Table */
+#define GSID_HOST_STATE_SIZE		0x0001
+#define GSID_RUN_OUTPUT_MIN_SIZE	0x0002
+#define GSID_LOGICAL_PVR		0x0003
+#define GSID_TB_OFFSET			0x0004
+#define GSID_PARTITION_TABLE		0x0005
+#define GSID_PROCESS_TABLE		0x0006
 
-#define GSID_RUN_INPUT			0x0C00 /* Run VCPU Input Buffer */
-#define GSID_RUN_OUTPUT			0x0C01 /* Run VCPU Out Buffer */
-#define GSID_VPA			0x0C02 /* HRA to Guest VCPU VPA */
+#define GSID_RUN_INPUT			0x0C00
+#define GSID_RUN_OUTPUT			0x0C01
+#define GSID_VPA			0x0C02
 
 #define GSID_GPR0	0x1000
 #define GSID_GPR1	0x1001
@@ -996,6 +997,137 @@ static inline void gsm_include_all(struct gs_msg *gsm)
 static inline void gsm_reset(struct gs_msg *gsm)
 {
 	gsbm_zero(&gsm->bitmap);
+}
+
+/**
+ * gsb_recv - request all elements in the buffer have their value updated.
+ * @gsb: guest state buffer
+ * @flags: guest wide or thread wide
+ *
+ * Performs the H_GUEST_GET_STATE hcall for the guest state buffer.
+ * After returning from the hcall the guest state elements that were
+ * present in the buffer will have updated values from the hypervisor.
+ */
+static inline int gsb_recv(struct gs_buff *gsb, unsigned long flags)
+{
+	unsigned long hflags = 0;
+	unsigned long i;
+	int rc;
+
+	if (flags & GS_FLAGS_WIDE)
+		hflags |= H_GUEST_FLAGS_WIDE;
+
+	rc = plpar_guest_get_state(hflags, gsb->guest_id, gsb->vcpu_id,
+				   __pa(gsb->hdr), gsb->capacity, &i);
+	return rc;
+}
+
+/**
+ * gsb_receive_data - flexibly update values from a guest state buffer
+ * @gsb: guest state buffer
+ * @gsm: guest state message
+ *
+ * Requests updated values for the guest state values included in the guest
+ * state message. The guest state message will then deserialize the guest state
+ * buffer.
+ */
+static inline int gsb_receive_data(struct gs_buff *gsb, struct gs_msg *gsm)
+{
+	int rc;
+
+	rc = gsm_fill_info(gsm, gsb);
+	if (rc < 0)
+		return rc;
+
+	rc = gsb_recv(gsb, gsm->flags);
+	if (rc < 0)
+		return rc;
+
+	rc = gsm_refresh_info(gsm, gsb);
+	if (rc < 0)
+		return rc;
+	return 0;
+}
+
+/**
+ * gsb_recv - receive a single guest state ID
+ * @gsb: guest state buffer
+ * @gsm: guest state message
+ * @iden: guest state identity
+ */
+static inline int gsb_receive_datum(struct gs_buff *gsb, struct gs_msg *gsm,
+				    u16 iden)
+{
+	int rc;
+
+	gsm_include(gsm, iden);
+	rc = gsb_receive_data(gsb, gsm);
+	if (rc < 0)
+		return rc;
+	gsm_reset(gsm);
+	return 0;
+}
+
+/**
+ * gsb_send - send all elements in the buffer to the hypervisor.
+ * @gsb: guest state buffer
+ * @flags: guest wide or thread wide
+ *
+ * Performs the H_GUEST_SET_STATE hcall for the guest state buffer.
+ */
+static inline int gsb_send(struct gs_buff *gsb, unsigned long flags)
+{
+	unsigned long hflags = 0;
+	unsigned long i;
+	int rc;
+
+	if (gsb_nelems(gsb) == 0)
+		return 0;
+
+	if (flags & GS_FLAGS_WIDE)
+		hflags |= H_GUEST_FLAGS_WIDE;
+
+	rc = plpar_guest_set_state(hflags, gsb->guest_id, gsb->vcpu_id,
+				   __pa(gsb->hdr), gsb->capacity, &i);
+	return rc;
+}
+
+/**
+ * gsb_send_data - flexibly send values from a guest state buffer
+ * @gsb: guest state buffer
+ * @gsm: guest state message
+ *
+ * Sends the guest state values included in the guest state message.
+ */
+static inline int gsb_send_data(struct gs_buff *gsb, struct gs_msg *gsm)
+{
+	int rc;
+
+	rc = gsm_fill_info(gsm, gsb);
+	if (rc < 0)
+		return rc;
+	rc = gsb_send(gsb, gsm->flags);
+
+	return rc;
+}
+
+/**
+ * gsb_recv - send a single guest state ID
+ * @gsb: guest state buffer
+ * @gsm: guest state message
+ * @iden: guest state identity
+ */
+static inline int gsb_send_datum(struct gs_buff *gsb, struct gs_msg *gsm,
+				 u16 iden)
+{
+	int rc;
+
+	gsm_include(gsm, iden);
+	rc = gsb_send_data(gsb, gsm);
+	if (rc < 0)
+		return rc;
+	gsm_reset(gsm);
+	return 0;
 }
 
 #endif /* _ASM_POWERPC_GUEST_STATE_BUFFER_H */

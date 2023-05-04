@@ -677,6 +677,12 @@ static inline pte_t *find_kvm_host_pte(struct kvm *kvm, unsigned long mmu_seq,
 extern pte_t *find_kvm_nested_guest_pte(struct kvm *kvm, unsigned long lpid,
 					unsigned long ea, unsigned *hshift);
 
+int kvmhv_papr_vcpu_create(struct kvm_vcpu *vcpu, struct kvmhv_papr_host *nested_state);
+void kvmhv_papr_vcpu_free(struct kvm_vcpu *vcpu, struct kvmhv_papr_host *nested_state);
+int kvmhv_papr_flush_vcpu(struct kvm_vcpu *vcpu, u64 time_limit);
+int kvmhv_papr_set_ptbl_entry(u64 lpid, u64 dw0, u64 dw1);
+int kvmhv_papr_parse_output(struct kvm_vcpu *vcpu);
+
 #endif /* CONFIG_KVM_BOOK3S_HV_POSSIBLE */
 
 #endif /* __ASM_KVM_BOOK3S_64_H__ */
