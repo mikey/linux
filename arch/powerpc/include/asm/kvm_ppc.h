@@ -936,7 +936,7 @@ static inline ulong kvmppc_get_##reg(struct kvm_vcpu *vcpu)		\
 #define SPRNG_WRAPPER_SET(reg, bookehv_spr)				\
 static inline void kvmppc_set_##reg(struct kvm_vcpu *vcpu, ulong val)	\
 {									\
-	mtspr(bookehv_spr, val);						\
+	mtspr(bookehv_spr, val);					\
 }									\
 
 #define SHARED_WRAPPER_GET(reg, size)					\
@@ -957,9 +957,31 @@ static inline void kvmppc_set_##reg(struct kvm_vcpu *vcpu, u##size val)	\
 	       vcpu->arch.shared->reg = cpu_to_le##size(val);		\
 }									\
 
+#define SHARED_CACHE_WRAPPER_GET(reg, size)				\
+static inline u##size kvmppc_get_##reg(struct kvm_vcpu *vcpu)		\
+{									\
+	if (kvmppc_shared_big_endian(vcpu))				\
+	       return be##size##_to_cpu(vcpu->arch.shared->reg);	\
+	else								\
+	       return le##size##_to_cpu(vcpu->arch.shared->reg);	\
+}									\
+
+#define SHARED_CACHE_WRAPPER_SET(reg, size)				\
+static inline void kvmppc_set_##reg(struct kvm_vcpu *vcpu, u##size val)	\
+{									\
+	if (kvmppc_shared_big_endian(vcpu))				\
+	       vcpu->arch.shared->reg = cpu_to_be##size(val);		\
+	else								\
+	       vcpu->arch.shared->reg = cpu_to_le##size(val);		\
+}									\
+
 #define SHARED_WRAPPER(reg, size)					\
 	SHARED_WRAPPER_GET(reg, size)					\
 	SHARED_WRAPPER_SET(reg, size)					\
+
+#define SHARED_CACHE_WRAPPER(reg, size)					\
+	SHARED_CACHE_WRAPPER_GET(reg, size)				\
+	SHARED_CACHE_WRAPPER_SET(reg, size)				\
 
 #define SPRNG_WRAPPER(reg, bookehv_spr)					\
 	SPRNG_WRAPPER_GET(reg, bookehv_spr)				\
@@ -970,23 +992,29 @@ static inline void kvmppc_set_##reg(struct kvm_vcpu *vcpu, u##size val)	\
 #define SHARED_SPRNG_WRAPPER(reg, size, bookehv_spr)			\
 	SPRNG_WRAPPER(reg, bookehv_spr)					\
 
+#define SHARED_SPRNG_CACHE_WRAPPER(reg, size, bookehv_spr)		\
+	SPRNG_WRAPPER(reg, bookehv_spr)					\
+
 #else
 
 #define SHARED_SPRNG_WRAPPER(reg, size, bookehv_spr)			\
 	SHARED_WRAPPER(reg, size)					\
 
+#define SHARED_SPRNG_CACHE_WRAPPER(reg, size, bookehv_spr)		\
+	SHARED_CACHE_WRAPPER(reg, size)					\
+
 #endif
 
 SHARED_WRAPPER(critical, 64)
-SHARED_SPRNG_WRAPPER(sprg0, 64, SPRN_GSPRG0)
-SHARED_SPRNG_WRAPPER(sprg1, 64, SPRN_GSPRG1)
-SHARED_SPRNG_WRAPPER(sprg2, 64, SPRN_GSPRG2)
-SHARED_SPRNG_WRAPPER(sprg3, 64, SPRN_GSPRG3)
-SHARED_SPRNG_WRAPPER(srr0, 64, SPRN_GSRR0)
-SHARED_SPRNG_WRAPPER(srr1, 64, SPRN_GSRR1)
-SHARED_SPRNG_WRAPPER(dar, 64, SPRN_GDEAR)
+SHARED_SPRNG_CACHE_WRAPPER(sprg0, 64, SPRN_GSPRG0)
+SHARED_SPRNG_CACHE_WRAPPER(sprg1, 64, SPRN_GSPRG1)
+SHARED_SPRNG_CACHE_WRAPPER(sprg2, 64, SPRN_GSPRG2)
+SHARED_SPRNG_CACHE_WRAPPER(sprg3, 64, SPRN_GSPRG3)
+SHARED_SPRNG_CACHE_WRAPPER(srr0, 64, SPRN_GSRR0)
+SHARED_SPRNG_CACHE_WRAPPER(srr1, 64, SPRN_GSRR1)
+SHARED_SPRNG_CACHE_WRAPPER(dar, 64, SPRN_GDEAR)
 SHARED_SPRNG_WRAPPER(esr, 64, SPRN_GESR)
-SHARED_WRAPPER_GET(msr, 64)
+SHARED_CACHE_WRAPPER_GET(msr, 64)
 static inline void kvmppc_set_msr_fast(struct kvm_vcpu *vcpu, u64 val)
 {
 	if (kvmppc_shared_big_endian(vcpu))
@@ -994,7 +1022,7 @@ static inline void kvmppc_set_msr_fast(struct kvm_vcpu *vcpu, u64 val)
 	else
 	       vcpu->arch.shared->msr = cpu_to_le64(val);
 }
-SHARED_WRAPPER(dsisr, 32)
+SHARED_CACHE_WRAPPER(dsisr, 32)
 SHARED_WRAPPER(int_pending, 32)
 SHARED_WRAPPER(sprg4, 64)
 SHARED_WRAPPER(sprg5, 64)

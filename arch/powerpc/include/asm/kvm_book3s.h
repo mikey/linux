@@ -392,6 +392,16 @@ static inline ulong kvmppc_get_pc(struct kvm_vcpu *vcpu)
 	return vcpu->arch.regs.nip;
 }
 
+static inline void kvmppc_set_pid(struct kvm_vcpu *vcpu, u32 val)
+{
+	vcpu->arch.pid = val;
+}
+
+static inline u32 kvmppc_get_pid(struct kvm_vcpu *vcpu)
+{
+	return vcpu->arch.pid;
+}
+
 static inline u64 kvmppc_get_msr(struct kvm_vcpu *vcpu);
 static inline bool kvmppc_need_byteswap(struct kvm_vcpu *vcpu)
 {
@@ -403,10 +413,66 @@ static inline ulong kvmppc_get_fault_dar(struct kvm_vcpu *vcpu)
 	return vcpu->arch.fault_dar;
 }
 
+#define BOOK3S_WRAPPER_SET(reg, size)					\
+static inline void kvmppc_set_##reg(struct kvm_vcpu *vcpu, u##size val)	\
+{									\
+									\
+	vcpu->arch.reg = val;						\
+}
+
+#define BOOK3S_WRAPPER_GET(reg, size)					\
+static inline u##size kvmppc_get_##reg(struct kvm_vcpu *vcpu)		\
+{									\
+	return vcpu->arch.reg;						\
+}
+
+#define BOOK3S_WRAPPER(reg, size)					\
+	BOOK3S_WRAPPER_SET(reg, size)					\
+	BOOK3S_WRAPPER_GET(reg, size)					\
+
+BOOK3S_WRAPPER(tar, 64)
+BOOK3S_WRAPPER(ebbhr, 64)
+BOOK3S_WRAPPER(ebbrr, 64)
+BOOK3S_WRAPPER(bescr, 64)
+BOOK3S_WRAPPER(ic, 64)
+BOOK3S_WRAPPER(vrsave, 64)
+
+
+#define VCORE_WRAPPER_SET(reg, size)					\
+static inline void kvmppc_set_##reg ##_hv(struct kvm_vcpu *vcpu, u##size val)	\
+{									\
+	vcpu->arch.vcore->reg = val;					\
+}
+
+#define VCORE_WRAPPER_GET(reg, size)					\
+static inline u##size kvmppc_get_##reg ##_hv(struct kvm_vcpu *vcpu)	\
+{									\
+	return vcpu->arch.vcore->reg;					\
+}
+
+#define VCORE_WRAPPER(reg, size)					\
+	VCORE_WRAPPER_SET(reg, size)					\
+	VCORE_WRAPPER_GET(reg, size)					\
+
+
+VCORE_WRAPPER(vtb, 64)
+VCORE_WRAPPER(tb_offset, 64)
+VCORE_WRAPPER(lpcr, 64)
+
+static inline u64 kvmppc_get_dec_expires(struct kvm_vcpu *vcpu)
+{
+	return vcpu->arch.dec_expires;
+}
+
+static inline void kvmppc_set_dec_expires(struct kvm_vcpu *vcpu, u64 val)
+{
+	vcpu->arch.dec_expires = val;
+}
+
 /* Expiry time of vcpu DEC relative to host TB */
 static inline u64 kvmppc_dec_expires_host_tb(struct kvm_vcpu *vcpu)
 {
-	return vcpu->arch.dec_expires - vcpu->arch.vcore->tb_offset;
+	return kvmppc_get_dec_expires(vcpu) - kvmppc_get_tb_offset_hv(vcpu);
 }
 
 static inline bool is_kvmppc_resume_guest(int r)
