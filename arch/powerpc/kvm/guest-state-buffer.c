@@ -561,3 +561,52 @@ int gsm_refresh_info(struct gs_msg *gsm, struct gs_buff *gsb)
 	return gsm->ops->refresh_info(gsm, gsb);
 }
 EXPORT_SYMBOL(gsm_refresh_info);
+
+/**
+ * gsb_send - send all elements in the buffer to the hypervisor.
+ * @gsb: guest state buffer
+ * @flags: guest wide or thread wide
+ *
+ * Performs the H_GUEST_SET_STATE hcall for the guest state buffer.
+ */
+int gsb_send(struct gs_buff *gsb, unsigned long flags)
+{
+	unsigned long hflags = 0;
+	unsigned long i;
+	int rc;
+
+	if (gsb_nelems(gsb) == 0)
+		return 0;
+
+	if (flags & GS_FLAGS_WIDE)
+		hflags |= H_GUEST_FLAGS_WIDE;
+
+	rc = plpar_guest_set_state(hflags, gsb->guest_id, gsb->vcpu_id,
+				   __pa(gsb->hdr), gsb->capacity, &i);
+	return rc;
+}
+EXPORT_SYMBOL(gsb_send);
+
+/**
+ * gsb_recv - request all elements in the buffer have their value updated.
+ * @gsb: guest state buffer
+ * @flags: guest wide or thread wide
+ *
+ * Performs the H_GUEST_GET_STATE hcall for the guest state buffer.
+ * After returning from the hcall the guest state elements that were
+ * present in the buffer will have updated values from the hypervisor.
+ */
+int gsb_recv(struct gs_buff *gsb, unsigned long flags)
+{
+	unsigned long hflags = 0;
+	unsigned long i;
+	int rc;
+
+	if (flags & GS_FLAGS_WIDE)
+		hflags |= H_GUEST_FLAGS_WIDE;
+
+	rc = plpar_guest_get_state(hflags, gsb->guest_id, gsb->vcpu_id,
+				   __pa(gsb->hdr), gsb->capacity, &i);
+	return rc;
+}
+EXPORT_SYMBOL(gsb_recv);

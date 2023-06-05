@@ -12,6 +12,7 @@
 #include <linux/types.h>
 #include <linux/kvm_host.h>
 #include <asm/kvm_book3s_asm.h>
+#include <asm/guest-state-buffer.h>
 
 struct kvmppc_bat {
 	u64 raw;
@@ -316,6 +317,57 @@ long int kvmhv_nested_page_fault(struct kvm_vcpu *vcpu);
 
 void kvmppc_giveup_fac(struct kvm_vcpu *vcpu, ulong fac);
 
+
+#ifdef CONFIG_KVM_BOOK3S_HV_POSSIBLE
+
+extern bool __kvmhv_on_papr;
+
+static inline bool kvmhv_on_papr(void)
+{
+	return __kvmhv_on_papr;
+}
+
+#else
+
+static inline bool kvmhv_on_papr(void)
+{
+	return false;
+}
+
+#endif
+
+int __kvmhv_papr_reload_ptregs(struct kvm_vcpu *vcpu, struct pt_regs *regs);
+int __kvmhv_papr_mark_dirty_ptregs(struct kvm_vcpu *vcpu, struct pt_regs *regs);
+int __kvmhv_papr_mark_dirty(struct kvm_vcpu *vcpu, u16 iden);
+int __kvmhv_papr_cached_reload(struct kvm_vcpu *vcpu, u16 iden);
+
+static inline int kvmhv_papr_reload_ptregs(struct kvm_vcpu *vcpu, struct pt_regs *regs)
+{
+	if (kvmhv_on_papr())
+		return __kvmhv_papr_reload_ptregs(vcpu, regs);
+	return 0;
+}
+static inline int kvmhv_papr_mark_dirty_ptregs(struct kvm_vcpu *vcpu, struct pt_regs *regs)
+{
+	if (kvmhv_on_papr())
+		return __kvmhv_papr_mark_dirty_ptregs(vcpu, regs);
+	return 0;
+}
+
+static inline int kvmhv_papr_mark_dirty(struct kvm_vcpu *vcpu, u16 iden)
+{
+	if (kvmhv_on_papr())
+		return __kvmhv_papr_mark_dirty(vcpu, iden);
+	return 0;
+}
+
+static inline int kvmhv_papr_cached_reload(struct kvm_vcpu *vcpu, u16 iden)
+{
+	if (kvmhv_on_papr())
+		return __kvmhv_papr_cached_reload(vcpu, iden);
+	return 0;
+}
+
 extern int kvm_irq_bypass;
 
 static inline struct kvmppc_vcpu_book3s *to_book3s(struct kvm_vcpu *vcpu)
@@ -335,70 +387,84 @@ static inline struct kvmppc_vcpu_book3s *to_book3s(struct kvm_vcpu *vcpu)
 static inline void kvmppc_set_gpr(struct kvm_vcpu *vcpu, int num, ulong val)
 {
 	vcpu->arch.regs.gpr[num] = val;
+	kvmhv_papr_mark_dirty(vcpu, GSID_GPR(num));
 }
 
 static inline ulong kvmppc_get_gpr(struct kvm_vcpu *vcpu, int num)
 {
+	kvmhv_papr_cached_reload(vcpu, GSID_GPR(num));
 	return vcpu->arch.regs.gpr[num];
 }
 
 static inline void kvmppc_set_cr(struct kvm_vcpu *vcpu, u32 val)
 {
 	vcpu->arch.regs.ccr = val;
+	kvmhv_papr_mark_dirty(vcpu, GSID_CR);
 }
 
 static inline u32 kvmppc_get_cr(struct kvm_vcpu *vcpu)
 {
+	kvmhv_papr_cached_reload(vcpu, GSID_CR);
 	return vcpu->arch.regs.ccr;
 }
 
 static inline void kvmppc_set_xer(struct kvm_vcpu *vcpu, ulong val)
 {
 	vcpu->arch.regs.xer = val;
+	kvmhv_papr_mark_dirty(vcpu, GSID_XER);
 }
 
 static inline ulong kvmppc_get_xer(struct kvm_vcpu *vcpu)
 {
+	kvmhv_papr_cached_reload(vcpu, GSID_XER);
 	return vcpu->arch.regs.xer;
 }
 
 static inline void kvmppc_set_ctr(struct kvm_vcpu *vcpu, ulong val)
 {
 	vcpu->arch.regs.ctr = val;
+	kvmhv_papr_mark_dirty(vcpu, GSID_CTR);
 }
 
 static inline ulong kvmppc_get_ctr(struct kvm_vcpu *vcpu)
 {
+	kvmhv_papr_cached_reload(vcpu, GSID_CTR);
 	return vcpu->arch.regs.ctr;
 }
 
 static inline void kvmppc_set_lr(struct kvm_vcpu *vcpu, ulong val)
 {
 	vcpu->arch.regs.link = val;
+	kvmhv_papr_mark_dirty(vcpu, GSID_LR);
 }
 
 static inline ulong kvmppc_get_lr(struct kvm_vcpu *vcpu)
 {
+	kvmhv_papr_cached_reload(vcpu, GSID_LR);
 	return vcpu->arch.regs.link;
 }
 
 static inline void kvmppc_set_pc(struct kvm_vcpu *vcpu, ulong val)
 {
 	vcpu->arch.regs.nip = val;
+	kvmhv_papr_mark_dirty(vcpu, GSID_NIA);
 }
 
 static inline ulong kvmppc_get_pc(struct kvm_vcpu *vcpu)
 {
+	kvmhv_papr_cached_reload(vcpu, GSID_NIA);
 	return vcpu->arch.regs.nip;
 }
 
 static inline void kvmppc_set_pid(struct kvm_vcpu *vcpu, u32 val)
 {
 	vcpu->arch.pid = val;
+	kvmhv_papr_mark_dirty(vcpu, GSID_PIDR);
 }
 
 static inline u32 kvmppc_get_pid(struct kvm_vcpu *vcpu)
 {
+	kvmhv_papr_cached_reload(vcpu, GSID_PIDR);
 	return vcpu->arch.pid;
 }
 
@@ -415,111 +481,129 @@ static inline ulong kvmppc_get_fault_dar(struct kvm_vcpu *vcpu)
 
 static inline u64 kvmppc_get_fpr(struct kvm_vcpu *vcpu, int i)
 {
+	kvmhv_papr_cached_reload(vcpu, GSID_VSRS(i));
 	return vcpu->arch.fp.fpr[i][TS_FPROFFSET];
 }
 
 static inline void kvmppc_set_fpr(struct kvm_vcpu *vcpu, int i, u64 val)
 {
 	vcpu->arch.fp.fpr[i][TS_FPROFFSET] = val;
+	kvmhv_papr_mark_dirty(vcpu, GSID_VSRS(i));
 }
 
 static inline u64 kvmppc_get_fpscr(struct kvm_vcpu *vcpu)
 {
+	kvmhv_papr_cached_reload(vcpu, GSID_FPSCR);
 	return vcpu->arch.fp.fpscr;
 }
 
 static inline void kvmppc_set_fpscr(struct kvm_vcpu *vcpu, u64 val)
 {
 	vcpu->arch.fp.fpscr = val;
+	kvmhv_papr_mark_dirty(vcpu, GSID_FPSCR);
 }
 
 
 static inline u64 kvmppc_get_vsx_fpr(struct kvm_vcpu *vcpu, int i, int j)
 {
+	kvmhv_papr_cached_reload(vcpu, GSID_VSRS(i));
 	return vcpu->arch.fp.fpr[i][j];
 }
 
 static inline void kvmppc_set_vsx_fpr(struct kvm_vcpu *vcpu, int i, int j, u64 val)
 {
 	vcpu->arch.fp.fpr[i][j] = val;
+	kvmhv_papr_mark_dirty(vcpu, GSID_VSRS(i));
 }
 
 #ifdef CONFIG_VSX
 static inline vector128 kvmppc_get_vsx_vr(struct kvm_vcpu *vcpu, int i)
 {
+	kvmhv_papr_cached_reload(vcpu, GSID_VSRS(32 + i));
 	return vcpu->arch.vr.vr[i];
 }
 
 static inline void kvmppc_set_vsx_vr(struct kvm_vcpu *vcpu, int i, vector128 val)
 {
 	vcpu->arch.vr.vr[i] = val;
+	kvmhv_papr_mark_dirty(vcpu, GSID_VSRS(32 + i));
 }
 
 static inline u32 kvmppc_get_vscr(struct kvm_vcpu *vcpu)
 {
+	kvmhv_papr_cached_reload(vcpu, GSID_VSCR);
 	return vcpu->arch.vr.vscr.u[3];
 }
 
 static inline void kvmppc_set_vscr(struct kvm_vcpu *vcpu, u32 val)
 {
 	vcpu->arch.vr.vscr.u[3] = val;
+	kvmhv_papr_mark_dirty(vcpu, GSID_VSCR);
 }
 #endif
 
-#define BOOK3S_WRAPPER_SET(reg, size)					\
+#define BOOK3S_WRAPPER_SET(reg, size, iden)				\
 static inline void kvmppc_set_##reg(struct kvm_vcpu *vcpu, u##size val)	\
 {									\
 									\
 	vcpu->arch.reg = val;						\
+	kvmhv_papr_mark_dirty(vcpu, iden);				\
 }
 
-#define BOOK3S_WRAPPER_GET(reg, size)					\
+#define BOOK3S_WRAPPER_GET(reg, size, iden)				\
 static inline u##size kvmppc_get_##reg(struct kvm_vcpu *vcpu)		\
 {									\
+	kvmhv_papr_cached_reload(vcpu, iden);				\
 	return vcpu->arch.reg;						\
 }
 
-#define BOOK3S_WRAPPER(reg, size)					\
-	BOOK3S_WRAPPER_SET(reg, size)					\
-	BOOK3S_WRAPPER_GET(reg, size)					\
+#define BOOK3S_WRAPPER(reg, size, iden)					\
+	BOOK3S_WRAPPER_SET(reg, size, iden)				\
+	BOOK3S_WRAPPER_GET(reg, size, iden)				\
 
-BOOK3S_WRAPPER(tar, 64)
-BOOK3S_WRAPPER(ebbhr, 64)
-BOOK3S_WRAPPER(ebbrr, 64)
-BOOK3S_WRAPPER(bescr, 64)
-BOOK3S_WRAPPER(ic, 64)
-BOOK3S_WRAPPER(vrsave, 64)
+BOOK3S_WRAPPER(tar, 64, GSID_TAR)
+BOOK3S_WRAPPER(ebbhr, 64, GSID_EBBHR)
+BOOK3S_WRAPPER(ebbrr, 64, GSID_EBBRR)
+BOOK3S_WRAPPER(bescr, 64, GSID_BESCR)
+BOOK3S_WRAPPER(ic, 64, GSID_IC)
+BOOK3S_WRAPPER(vrsave, 64, GSID_VRSAVE)
 
 
-#define VCORE_WRAPPER_SET(reg, size)					\
+#define VCORE_WRAPPER_SET(reg, size, iden)				\
 static inline void kvmppc_set_##reg ##_hv(struct kvm_vcpu *vcpu, u##size val)	\
 {									\
 	vcpu->arch.vcore->reg = val;					\
+	kvmhv_papr_mark_dirty(vcpu, iden);				\
 }
 
-#define VCORE_WRAPPER_GET(reg, size)					\
+#define VCORE_WRAPPER_GET(reg, size, iden)				\
 static inline u##size kvmppc_get_##reg ##_hv(struct kvm_vcpu *vcpu)	\
 {									\
+	kvmhv_papr_cached_reload(vcpu, iden);				\
 	return vcpu->arch.vcore->reg;					\
 }
 
-#define VCORE_WRAPPER(reg, size)					\
-	VCORE_WRAPPER_SET(reg, size)					\
-	VCORE_WRAPPER_GET(reg, size)					\
+#define VCORE_WRAPPER(reg, size, iden)					\
+	VCORE_WRAPPER_SET(reg, size, iden)				\
+	VCORE_WRAPPER_GET(reg, size, iden)				\
 
 
-VCORE_WRAPPER(vtb, 64)
-VCORE_WRAPPER(tb_offset, 64)
-VCORE_WRAPPER(lpcr, 64)
+VCORE_WRAPPER(vtb, 64, GSID_VTB)
+VCORE_WRAPPER(tb_offset, 64, GSID_TB_OFFSET)
+VCORE_WRAPPER(lpcr, 64, GSID_LPCR)
 
 static inline u64 kvmppc_get_dec_expires(struct kvm_vcpu *vcpu)
 {
+	kvmhv_papr_cached_reload(vcpu, GSID_TB_OFFSET);
+	kvmhv_papr_cached_reload(vcpu, GSID_DEC_EXPIRY_TB);
 	return vcpu->arch.dec_expires;
 }
 
 static inline void kvmppc_set_dec_expires(struct kvm_vcpu *vcpu, u64 val)
 {
 	vcpu->arch.dec_expires = val;
+	kvmhv_papr_cached_reload(vcpu, GSID_TB_OFFSET);
+	kvmhv_papr_mark_dirty(vcpu, GSID_DEC_EXPIRY_TB);
 }
 
 /* Expiry time of vcpu DEC relative to host TB */

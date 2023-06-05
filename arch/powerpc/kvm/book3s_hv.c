@@ -383,6 +383,11 @@ static void kvmppc_core_vcpu_put_hv(struct kvm_vcpu *vcpu)
 	spin_unlock_irqrestore(&vcpu->arch.tbacct_lock, flags);
 }
 
+static void kvmppc_set_pvr_hv(struct kvm_vcpu *vcpu, u32 pvr)
+{
+	vcpu->arch.pvr = pvr;
+}
+
 /* Dummy value used in computing PCR value below */
 #define PCR_ARCH_31    (PCR_ARCH_300 << 1)
 
@@ -1262,13 +1267,14 @@ int kvmppc_pseries_do_hcall(struct kvm_vcpu *vcpu)
 			return RESUME_HOST;
 		break;
 #endif
-	case H_RANDOM:
+	case H_RANDOM: {
 		unsigned long rand;
 
 		if (!arch_get_random_seed_longs(&rand, 1))
 			ret = H_HARDWARE;
 		kvmppc_set_gpr(vcpu, 4, rand);
 		break;
+	}
 	case H_RPT_INVALIDATE:
 		ret = kvmppc_h_rpt_invalidate(vcpu, kvmppc_get_gpr(vcpu, 4),
 					      kvmppc_get_gpr(vcpu, 5),
@@ -2921,14 +2927,21 @@ static int kvmppc_core_vcpu_create_hv(struct kvm_vcpu *vcpu)
 	vcpu->arch.shared_big_endian = false;
 #endif
 #endif
-	kvmppc_set_mmcr_hv(vcpu, 0, MMCR0_FC);
 
+	if (kvmhv_on_papr()) {
+		err = kvmhv_papr_vcpu_create(vcpu, &vcpu->arch.papr_host);
+		if (err < 0)
+			return err;
+	}
+
+	kvmppc_set_mmcr_hv(vcpu, 0, MMCR0_FC);
 	if (cpu_has_feature(CPU_FTR_ARCH_31)) {
 		kvmppc_set_mmcr_hv(vcpu, 0, kvmppc_get_mmcr_hv(vcpu, 0) | MMCR0_PMCCEXT);
 		kvmppc_set_mmcra_hv(vcpu, MMCRA_BHRB_DISABLE);
 	}
 
 	kvmppc_set_ctrl_hv(vcpu, CTRL_RUNLATCH);
+	kvmppc_set_amor_hv(vcpu, ~0);
 	/* default to host PVR, since we can't spoof it */
 	kvmppc_set_pvr_hv(vcpu, mfspr(SPRN_PVR));
 	spin_lock_init(&vcpu->arch.vpa_update_lock);
@@ -3006,6 +3019,8 @@ static int kvmppc_core_vcpu_create_hv(struct kvm_vcpu *vcpu)
 			kvm->arch.vcores[core] = vcore;
 			kvm->arch.online_vcores++;
 			mutex_unlock(&kvm->arch.mmu_setup_lock);
+			if (kvmhv_on_papr())
+				kvmppc_set_lpcr_hv(vcpu, vcpu->arch.vcore->lpcr);
 		}
 	}
 	mutex_unlock(&kvm->lock);
@@ -3078,6 +3093,8 @@ static void kvmppc_core_vcpu_free_hv(struct kvm_vcpu *vcpu)
 	unpin_vpa(vcpu->kvm, &vcpu->arch.slb_shadow);
 	unpin_vpa(vcpu->kvm, &vcpu->arch.vpa);
 	spin_unlock(&vcpu->arch.vpa_update_lock);
+	if (kvmhv_on_papr())
+		kvmhv_papr_vcpu_free(vcpu, &vcpu->arch.papr_host);
 }
 
 static int kvmppc_core_check_requests_hv(struct kvm_vcpu *vcpu)
@@ -4042,6 +4059,50 @@ static void vcpu_vpa_increment_dispatch(struct kvm_vcpu *vcpu)
 	}
 }
 
+static int kvmhv_vcpu_entry_papr(struct kvm_vcpu *vcpu, u64 time_limit, unsigned long lpcr, u64 *tb)
+{
+	struct kvmhv_papr_host *ph;
+	unsigned long msr, i;
+	int trap;
+	long rc;
+
+	ph = &vcpu->arch.papr_host;
+
+	msr = mfmsr();
+	kvmppc_msr_hard_disable_set_facilities(vcpu, msr);
+	if (lazy_irq_pending())
+		return 0;
+
+	kvmhv_papr_flush_vcpu(vcpu, time_limit);
+
+	accumulate_time(vcpu, &vcpu->arch.in_guest);
+	rc = plpar_guest_run_vcpu(0, vcpu->kvm->arch.lpid, vcpu->vcpu_id,
+				  &trap, &i);
+
+	if (rc != H_SUCCESS) {
+		pr_err("KVM Guest Run VCPU hcall failed\n");
+		if (rc == H_INVALID_ELEMENT_ID)
+			pr_err("KVM: Guest Run VCPU invalid element id at %ld\n", i);
+		else if (rc == H_INVALID_ELEMENT_SIZE)
+			pr_err("KVM: Guest Run VCPU invalid element size at %ld\n", i);
+		else if (rc == H_INVALID_ELEMENT_VALUE)
+			pr_err("KVM: Guest Run VCPU invalid element value at %ld\n", i);
+		return 0;
+	}
+	accumulate_time(vcpu, &vcpu->arch.guest_exit);
+
+	*tb = mftb();
+	gsm_reset(ph->vcpu_message);
+	gsm_reset(ph->vcore_message);
+	gsbm_zero(&ph->valids);
+
+	kvmhv_papr_parse_output(vcpu);
+
+	timer_rearm_host_dec(*tb);
+
+	return trap;
+}
+
 /* call our hypervisor to load up HV regs and go */
 static int kvmhv_vcpu_entry_p9_nested(struct kvm_vcpu *vcpu, u64 time_limit, unsigned long lpcr, u64 *tb)
 {
@@ -4159,7 +4220,10 @@ static int kvmhv_p9_guest_entry(struct kvm_vcpu *vcpu, u64 time_limit,
 	vcpu_vpa_increment_dispatch(vcpu);
 
 	if (kvmhv_on_pseries()) {
-		trap = kvmhv_vcpu_entry_p9_nested(vcpu, time_limit, lpcr, tb);
+		if (!kvmhv_on_papr())
+			trap = kvmhv_vcpu_entry_p9_nested(vcpu, time_limit, lpcr, tb);
+		else
+			trap = kvmhv_vcpu_entry_papr(vcpu, time_limit, lpcr, tb);
 
 		/* H_CEDE has to be handled now, not later */
 		if (trap == BOOK3S_INTERRUPT_SYSCALL && !nested &&
@@ -5119,6 +5183,7 @@ static void kvmppc_core_commit_memory_region_hv(struct kvm *kvm,
  */
 void kvmppc_update_lpcr(struct kvm *kvm, unsigned long lpcr, unsigned long mask)
 {
+	struct kvm_vcpu *vcpu;
 	long int i;
 	u32 cores_done = 0;
 
@@ -5138,6 +5203,12 @@ void kvmppc_update_lpcr(struct kvm *kvm, unsigned long lpcr, unsigned long mask)
 		spin_unlock(&vc->lock);
 		if (++cores_done >= kvm->arch.online_vcores)
 			break;
+	}
+
+	if (kvmhv_on_papr()) {
+		kvm_for_each_vcpu(i, vcpu, kvm) {
+			kvmppc_set_lpcr_hv(vcpu, vcpu->arch.vcore->lpcr);
+		}
 	}
 }
 
@@ -5405,14 +5476,42 @@ static int kvmppc_core_init_vm_hv(struct kvm *kvm)
 
 	/* Allocate the guest's logical partition ID */
 
-	lpid = kvmppc_alloc_lpid();
-	if ((long)lpid < 0)
-		return -ENOMEM;
-	kvm->arch.lpid = lpid;
+	if (!kvmhv_on_papr()) {
+		lpid = kvmppc_alloc_lpid();
+		if ((long)lpid < 0)
+			return -ENOMEM;
+		kvm->arch.lpid = lpid;
+	}
 
 	kvmppc_alloc_host_rm_ops();
 
 	kvmhv_vm_nested_init(kvm);
+
+	if (kvmhv_on_papr()) {
+		long rc;
+		unsigned long guest_id;
+
+		rc = plpar_guest_create(0, &guest_id);
+
+		if (rc != H_SUCCESS)
+			pr_err("KVM: Create Guest hcall failed, rc=%ld\n", rc);
+
+		switch (rc) {
+		case H_PARAMETER:
+		case H_FUNCTION:
+		case H_STATE:
+			return -EINVAL;
+		case H_NOT_ENOUGH_RESOURCES:
+		case H_ABORTED:
+			return -ENOMEM;
+		case H_AUTHORITY:
+			return -EPERM;
+		case H_NOT_AVAILABLE:
+			return -EBUSY;
+		}
+		kvm->arch.lpid = guest_id;
+	}
+
 
 	/*
 	 * Since we don't flush the TLB when tearing down a VM,
@@ -5483,7 +5582,10 @@ static int kvmppc_core_init_vm_hv(struct kvm *kvm)
 			lpcr |= LPCR_HAIL;
 		ret = kvmppc_init_vm_radix(kvm);
 		if (ret) {
-			kvmppc_free_lpid(kvm->arch.lpid);
+			if (kvmhv_on_papr())
+				plpar_guest_delete(0, kvm->arch.lpid);
+			else
+				kvmppc_free_lpid(kvm->arch.lpid);
 			return ret;
 		}
 		kvmppc_setup_partition_table(kvm);
@@ -5573,10 +5675,14 @@ static void kvmppc_core_destroy_vm_hv(struct kvm *kvm)
 		kvm->arch.process_table = 0;
 		if (kvm->arch.secure_guest)
 			uv_svm_terminate(kvm->arch.lpid);
-		kvmhv_set_ptbl_entry(kvm->arch.lpid, 0, 0);
+		if (!kvmhv_on_papr())
+			kvmhv_set_ptbl_entry(kvm->arch.lpid, 0, 0);
 	}
 
-	kvmppc_free_lpid(kvm->arch.lpid);
+	if (kvmhv_on_papr())
+		plpar_guest_delete(0, kvm->arch.lpid);
+	else
+		kvmppc_free_lpid(kvm->arch.lpid);
 
 	kvmppc_free_pimap(kvm);
 }

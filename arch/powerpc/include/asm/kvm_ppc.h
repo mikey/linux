@@ -615,6 +615,35 @@ static inline bool kvmhv_on_pseries(void)
 {
 	return false;
 }
+
+#endif
+
+#ifndef CONFIG_PPC_BOOK3S
+
+static inline bool kvmhv_on_papr(void)
+{
+	return false;
+}
+
+static inline int kvmhv_papr_reload_ptregs(struct kvm_vcpu *vcpu, struct pt_regs *regs)
+{
+	return 0;
+}
+static inline int kvmhv_papr_mark_dirty_ptregs(struct kvm_vcpu *vcpu, struct pt_regs *regs)
+{
+	return 0;
+}
+
+static inline int kvmhv_papr_mark_dirty(struct kvm_vcpu *vcpu, u16 iden)
+{
+	return 0;
+}
+
+static inline int kvmhv_papr_cached_reload(struct kvm_vcpu *vcpu, u16 iden)
+{
+	return 0;
+}
+
 #endif
 
 #ifdef CONFIG_KVM_XICS
@@ -957,31 +986,33 @@ static inline void kvmppc_set_##reg(struct kvm_vcpu *vcpu, u##size val)	\
 	       vcpu->arch.shared->reg = cpu_to_le##size(val);		\
 }									\
 
-#define SHARED_CACHE_WRAPPER_GET(reg, size)				\
+#define SHARED_CACHE_WRAPPER_GET(reg, size, iden)			\
 static inline u##size kvmppc_get_##reg(struct kvm_vcpu *vcpu)		\
 {									\
+	kvmhv_papr_cached_reload(vcpu, iden);				\
 	if (kvmppc_shared_big_endian(vcpu))				\
 	       return be##size##_to_cpu(vcpu->arch.shared->reg);	\
 	else								\
 	       return le##size##_to_cpu(vcpu->arch.shared->reg);	\
 }									\
 
-#define SHARED_CACHE_WRAPPER_SET(reg, size)				\
+#define SHARED_CACHE_WRAPPER_SET(reg, size, iden)			\
 static inline void kvmppc_set_##reg(struct kvm_vcpu *vcpu, u##size val)	\
 {									\
 	if (kvmppc_shared_big_endian(vcpu))				\
 	       vcpu->arch.shared->reg = cpu_to_be##size(val);		\
 	else								\
 	       vcpu->arch.shared->reg = cpu_to_le##size(val);		\
+	kvmhv_papr_mark_dirty(vcpu, iden);				\
 }									\
 
 #define SHARED_WRAPPER(reg, size)					\
 	SHARED_WRAPPER_GET(reg, size)					\
 	SHARED_WRAPPER_SET(reg, size)					\
 
-#define SHARED_CACHE_WRAPPER(reg, size)					\
-	SHARED_CACHE_WRAPPER_GET(reg, size)				\
-	SHARED_CACHE_WRAPPER_SET(reg, size)				\
+#define SHARED_CACHE_WRAPPER(reg, size, iden)				\
+	SHARED_CACHE_WRAPPER_GET(reg, size, iden)			\
+	SHARED_CACHE_WRAPPER_SET(reg, size, iden)			\
 
 #define SPRNG_WRAPPER(reg, bookehv_spr)					\
 	SPRNG_WRAPPER_GET(reg, bookehv_spr)				\
@@ -1000,29 +1031,30 @@ static inline void kvmppc_set_##reg(struct kvm_vcpu *vcpu, u##size val)	\
 #define SHARED_SPRNG_WRAPPER(reg, size, bookehv_spr)			\
 	SHARED_WRAPPER(reg, size)					\
 
-#define SHARED_SPRNG_CACHE_WRAPPER(reg, size, bookehv_spr)		\
-	SHARED_CACHE_WRAPPER(reg, size)					\
+#define SHARED_SPRNG_CACHE_WRAPPER(reg, size, bookehv_spr, iden)	\
+	SHARED_CACHE_WRAPPER(reg, size, iden)				\
 
 #endif
 
 SHARED_WRAPPER(critical, 64)
-SHARED_SPRNG_CACHE_WRAPPER(sprg0, 64, SPRN_GSPRG0)
-SHARED_SPRNG_CACHE_WRAPPER(sprg1, 64, SPRN_GSPRG1)
-SHARED_SPRNG_CACHE_WRAPPER(sprg2, 64, SPRN_GSPRG2)
-SHARED_SPRNG_CACHE_WRAPPER(sprg3, 64, SPRN_GSPRG3)
-SHARED_SPRNG_CACHE_WRAPPER(srr0, 64, SPRN_GSRR0)
-SHARED_SPRNG_CACHE_WRAPPER(srr1, 64, SPRN_GSRR1)
-SHARED_SPRNG_CACHE_WRAPPER(dar, 64, SPRN_GDEAR)
+SHARED_SPRNG_CACHE_WRAPPER(sprg0, 64, SPRN_GSPRG0, GSID_SPRG0)
+SHARED_SPRNG_CACHE_WRAPPER(sprg1, 64, SPRN_GSPRG1, GSID_SPRG1)
+SHARED_SPRNG_CACHE_WRAPPER(sprg2, 64, SPRN_GSPRG2, GSID_SPRG2)
+SHARED_SPRNG_CACHE_WRAPPER(sprg3, 64, SPRN_GSPRG3, GSID_SPRG3)
+SHARED_SPRNG_CACHE_WRAPPER(srr0, 64, SPRN_GSRR0, GSID_SRR0)
+SHARED_SPRNG_CACHE_WRAPPER(srr1, 64, SPRN_GSRR1, GSID_SRR1)
+SHARED_SPRNG_CACHE_WRAPPER(dar, 64, SPRN_GDEAR, GSID_DAR)
 SHARED_SPRNG_WRAPPER(esr, 64, SPRN_GESR)
-SHARED_CACHE_WRAPPER_GET(msr, 64)
+SHARED_CACHE_WRAPPER_GET(msr, 64, GSID_MSR)
 static inline void kvmppc_set_msr_fast(struct kvm_vcpu *vcpu, u64 val)
 {
 	if (kvmppc_shared_big_endian(vcpu))
 	       vcpu->arch.shared->msr = cpu_to_be64(val);
 	else
 	       vcpu->arch.shared->msr = cpu_to_le64(val);
+	kvmhv_papr_mark_dirty(vcpu, GSID_MSR);
 }
-SHARED_CACHE_WRAPPER(dsisr, 32)
+SHARED_CACHE_WRAPPER(dsisr, 32, GSID_DSISR)
 SHARED_WRAPPER(int_pending, 32)
 SHARED_WRAPPER(sprg4, 64)
 SHARED_WRAPPER(sprg5, 64)

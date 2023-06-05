@@ -25,6 +25,7 @@
 #include <asm/cacheflush.h>
 #include <asm/hvcall.h>
 #include <asm/mce.h>
+#include <asm/guest-state-buffer.h>
 
 #define __KVM_HAVE_ARCH_VCPU_DEBUGFS
 
@@ -509,6 +510,23 @@ union xive_tma_w01 {
 	__be64 w01;
 };
 
+ /* Nested PAPR host H_GUEST_RUN_VCPU configuration */
+struct kvmhv_papr_config {
+	struct gs_buff_info vcpu_run_output_cfg;
+	struct gs_buff_info vcpu_run_input_cfg;
+	u64 vcpu_run_output_size;
+};
+
+ /* Nested PAPR host state */
+struct kvmhv_papr_host {
+	struct kvmhv_papr_config cfg;
+	struct gs_buff *vcpu_run_output;
+	struct gs_buff *vcpu_run_input;
+	struct gs_msg *vcpu_message;
+	struct gs_msg *vcore_message;
+	struct gs_bitmap valids;
+};
+
 struct kvm_vcpu_arch {
 	ulong host_stack;
 	u32 host_pid;
@@ -575,6 +593,7 @@ struct kvm_vcpu_arch {
 	ulong dscr;
 	ulong amr;
 	ulong uamor;
+	ulong amor;
 	ulong iamr;
 	u32 ctrl;
 	u32 dabrx;
@@ -829,6 +848,8 @@ struct kvm_vcpu_arch {
 	u64 nested_hfscr;	/* HFSCR that the L1 requested for the nested guest */
 	u32 nested_vcpu_id;
 	gpa_t nested_io_gpr;
+	/* For nested APIv2 guests*/
+	struct kvmhv_papr_host papr_host;
 #endif
 
 #ifdef CONFIG_KVM_BOOK3S_HV_EXIT_TIMING
